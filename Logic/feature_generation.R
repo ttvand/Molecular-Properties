@@ -1,7 +1,7 @@
 # rm(list=ls())
 library(data.table)
 
-mode <- c("train", "test")[2]
+mode <- c("train", "test")[1]
 reload_data_sources <- TRUE
 reload_data_sources <- TRUE
 
@@ -98,26 +98,26 @@ additional_edge[, `:=`(molecule_dist_mean=mean(distance),
 additional_edge[, `:=`(
   atom_0_couples_count=.N,
   atom_0_couples_count_direct=sum(bond_type_0==1),
-  molecule_atom_index_0_x_1_std=sd(x_1),
-  molecule_atom_index_0_y_1_mean=mean(y_1),
-  molecule_atom_index_0_y_1_std=sd(y_1),
-  molecule_atom_index_0_y_1_max=max(y_1),
-  molecule_atom_index_0_z_1_std=sd(z_1),
+  # molecule_atom_index_0_x_1_std=sd(x_1),
+  # molecule_atom_index_0_y_1_mean=mean(y_1),
+  # molecule_atom_index_0_y_1_std=sd(y_1),
+  # molecule_atom_index_0_y_1_max=max(y_1),
+  # molecule_atom_index_0_z_1_std=sd(z_1),
   molecule_atom_index_0_dist_mean=mean(distance),
   molecule_atom_index_0_dist_max=max(distance),
   molecule_atom_index_0_dist_min=min(distance),
   molecule_atom_index_0_dist_std=sd(distance)),
   .(molecule_name, atom_index_0)]
 additional_edge[atom_0_couples_count==1, `:=`(
-  molecule_atom_index_0_x_1_std=0,
-  molecule_atom_index_0_y_1_std=0,
-  molecule_atom_index_0_z_1_std=0,
+  # molecule_atom_index_0_x_1_std=0,
+  # molecule_atom_index_0_y_1_std=0,
+  # molecule_atom_index_0_z_1_std=0,
   molecule_atom_index_0_dist_std=0)
   ]
 
 additional_edge[, `:=`(
-  molecule_atom_index_0_y_1_mean_diff=molecule_atom_index_0_y_1_mean-y_1,
-  molecule_atom_index_0_y_1_max_diff=molecule_atom_index_0_y_1_max-y_1,
+  # molecule_atom_index_0_y_1_mean_diff=molecule_atom_index_0_y_1_mean-y_1,
+  # molecule_atom_index_0_y_1_max_diff=molecule_atom_index_0_y_1_max-y_1,
   molecule_atom_index_0_dist_mean_diff=molecule_atom_index_0_dist_mean-distance,
   molecule_atom_index_0_dist_mean_div=molecule_atom_index_0_dist_mean/distance,
   molecule_atom_index_0_dist_max_diff=molecule_atom_index_0_dist_max-distance,
@@ -131,6 +131,7 @@ additional_edge[, `:=`(
 
 additional_edge[, `:=`(
   atom_1_couples_count=.N,
+  atom_1_couples_count_direct=sum(bond_type_0==1),
   molecule_atom_index_1_dist_mean=mean(distance),
   molecule_atom_index_1_dist_max=max(distance),
   molecule_atom_index_1_dist_min=min(distance),
@@ -149,6 +150,22 @@ additional_edge[, `:=`(
   molecule_atom_index_1_dist_min_div=molecule_atom_index_1_dist_min/distance,
   molecule_atom_index_1_dist_std_diff=molecule_atom_index_1_dist_std-distance,
   molecule_atom_index_1_dist_std_div=molecule_atom_index_1_dist_std/distance)
+  ]
+
+
+additional_edge[, `:=`(
+  molecule_atom_0_dist_mean=mean(distance),
+  molecule_atom_0_dist_min=min(distance),
+  molecule_atom_0_dist_std=sd(distance)),
+  .(molecule_name, atom_0)]
+additional_edge[atom_0_couples_count==1, `:=`(
+  molecule_atom_0_dist_std=0)
+  ]
+
+additional_edge[, `:=`(
+  molecule_atom_0_dist_min_diff=molecule_atom_0_dist_min-distance,
+  molecule_atom_0_dist_min_div=molecule_atom_0_dist_min/distance,
+  molecule_atom_0_dist_std_diff=molecule_atom_0_dist_std-distance)
   ]
 
 
@@ -226,6 +243,29 @@ nodes <- merge(
 coulomb <- fread(file.path(data_folder,
                            paste0(mode, "_inv_squared_distances.csv")))
 nodes <- merge(nodes, coulomb, by=c("molecule_name", "atom_index"))
+
+
+##################
+# Angle features #
+##################
+angles <- fread(file.path(data_folder, paste0(mode, "_angles.csv")))
+edges <- merge(edges, angles, by=c(edge_primary_keys, "type"), all=TRUE)
+edges[is.na(distance_0), distance_0:=L2dist]
+edges[is.na(distance_1), distance_1:=L2dist]
+edges[is.na(cos_0_1), cos_0_1:=0]
+edges[is.na(cos_0), cos_0:=0]
+edges[is.na(cos_1), cos_1:=0]
+edges[is.na(interm_0_atom), interm_0_atom:='None']
+edges[is.na(interm_1_atom), interm_1_atom:='None']
+edges[is.na(atom_0_interm_0_interm_1_cosine),
+      atom_0_interm_0_interm_1_cosine:=0]
+edges[is.na(interm_0_interm_1_atom_1_cosine),
+      interm_0_interm_1_atom_1_cosine:=0]
+edges[is.na(dihedral_angle), dihedral_angle:=0]
+edges[is.na(`2Jdirect_cosine`), `2Jdirect_cosine`:=0]
+edges[, dihedral_cos:=cos(dihedral_angle)]
+edges[, dihedral_sin:=sin(dihedral_angle)]
+edges[, dihedral_angle:=NULL]
 
 
 ###########################

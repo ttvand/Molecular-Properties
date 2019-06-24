@@ -9,16 +9,18 @@ import utils
 
 num_random_hyperpars = 1000
 model_save_name = 'initial_graphnet'
-sweep_save_folder = '/home/tom/Kaggle/Molecular Properties/Data/Hyper Sweeps/'
+sweep_save_folder = '/home/tom/Kaggle/Molecular-Properties/Data/Hyper Sweeps/'
 validation_fraction = 0.2
 continuing_experiment = ['19-06-21-17-12.csv', None][1]
 
 fixed_params = {
     'seed': 14,
-    'num_training_iterations': 10000,
+    'num_training_iterations': 1e9,
+    'max_train_seconds': 3600*4,
     'batch_size_train': 32,
     'batch_size_valid_train': 256,
     'batch_size_valid': 1024,
+    'edge_output_layer_norm': False,
     
     'log_every_seconds': 120,
     }
@@ -26,16 +28,19 @@ fixed_params = {
 # In order of apparent effect on OOF performance
 param_grid = {
     'num_processing_steps': [8, 16], # (message-passing) steps.
-    'learning_rate': [5e-4, 1e-3],
+    'learning_rate': [1e-3],
     'inverse_relative_error_weights': [False, True],
+    'skip_connection_encoder_decoder': [False, True],
+    'separate_edge_output': [False, True],
     'latent_size': [128, 256],
     'num_layers': [3, 4],
 }
 
 # Load the train graphs if they have not been loaded before
 if (not 'TRAIN_GRAPHS' in locals()) and (not 'TRAIN_GRAPHS' in globals()):
-  TRAIN_GRAPHS, molecule_names = utils.load_all_graphs('train')
-  TRAIN_TARGET_GRAPHS, _ = utils.load_all_graphs('train', target_graph=True)
+  TRAIN_GRAPHS, EDGE_PERMUTATIONS, molecule_names = utils.load_all_graphs(
+      'train')
+  TRAIN_TARGET_GRAPHS, _, _ = utils.load_all_graphs('train', target_graph=True)
 
 # Determine the train and validation ids.
 num_graphs = len(TRAIN_GRAPHS)
@@ -68,10 +73,11 @@ for i in range(num_random_hyperpars):
   hyperpars = {k: random.choice(v) for k, v in param_grid.items()}
   selected_grid = OrderedDict(sorted(hyperpars.items()))
   hyperpars.update(fixed_params)
-  utils.train_model(hyperpars, TRAIN_GRAPHS, TRAIN_TARGET_GRAPHS, train_ids,
-                    valid_ids, model_save_path)
+  utils.train_model(hyperpars, TRAIN_GRAPHS, TRAIN_TARGET_GRAPHS,
+                    EDGE_PERMUTATIONS, train_ids, valid_ids, model_save_path)
   valid_score, valid_mae = utils.validate_model(
-      hyperpars, TRAIN_GRAPHS, TRAIN_TARGET_GRAPHS, valid_ids, model_save_path)
+      hyperpars, TRAIN_GRAPHS, TRAIN_TARGET_GRAPHS, EDGE_PERMUTATIONS,
+      valid_ids, model_save_path)
   validation = OrderedDict()
   validation['Score'] = valid_score
   validation['MAE'] = valid_mae

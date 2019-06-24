@@ -17,7 +17,7 @@ import time
 
 
 data_folder = '/media/tom/cbd_drive/Kaggle/Molecular Properties/Data/'
-#data_folder = '/home/tom/Kaggle/Molecular Properties/Data/'
+#data_folder = '/home/tom/Kaggle/Molecular-Properties/Data/'
 
 # Dict that maps an atom to a one-hot embedding
 ATOM_ONEHOTS = {
@@ -55,6 +55,14 @@ BINDING_ONEHOTS = {
     '3.0CN': np.array([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]),
     }
 
+# Dict that maps a 3J connection atom to a one-hot embedding
+ATOM_3J_ONEHOTS = {
+    'C': np.array([1, 0, 0]),
+    'N': np.array([0, 1, 0]),
+    'O': np.array([0, 0, 1]),
+    'None': np.array([0, 0, 0]),
+    }
+
 
 def get_next_ids(df, name, start_id, considered_nexts = 10000):
   sub_df = df[start_id:(start_id+considered_nexts)]
@@ -62,6 +70,65 @@ def get_next_ids(df, name, start_id, considered_nexts = 10000):
   assert(match_ids.size > 0 and match_ids[-1] < (considered_nexts-1))
   
   return start_id + match_ids[-1] + 1, start_id + match_ids
+
+
+def get_other_edge_ids(cat_sizes_pairs, numeric_colnames):
+  cat_sizes, cat_pairs = cat_sizes_pairs
+  num_categorical = np.array(cat_sizes).sum()
+  num_numeric = len(numeric_colnames)
+  num_features = num_categorical + num_numeric
+  other_permutation = np.arange(num_features)
+  
+  # Add categorical permutations
+  cat_counter = 0
+  for (i, s) in enumerate(cat_sizes):
+    for first, second in cat_pairs:
+      if i == first and (cat_sizes[first] == cat_sizes[second]):
+        first_ids = cat_counter + np.arange(s)
+        second_ids = cat_counter + s + np.arange(s)
+        tmp = other_permutation[first_ids]
+        other_permutation[first_ids] = other_permutation[second_ids]
+        other_permutation[second_ids] = tmp
+        
+    cat_counter += s
+  
+  # Add numerical permutations
+  numeric_pairs = [
+      ('atom_0_couples_count', 'atom_1_couples_count'),
+      ('atom_0_couples_count_direct', 'atom_1_couples_count_direct'),
+      ('molecule_atom_index_0_dist_mean', 'molecule_atom_index_1_dist_mean'),
+      ('molecule_atom_index_0_dist_max', 'molecule_atom_index_1_dist_max'),
+      ('molecule_atom_index_0_dist_min', 'molecule_atom_index_1_dist_min'),
+      ('molecule_atom_index_0_dist_std', 'molecule_atom_index_1_dist_std'),
+      ('molecule_atom_index_0_dist_mean_diff', 'molecule_atom_index_1_dist_mean_diff'),
+      ('molecule_atom_index_0_dist_mean_div', 'molecule_atom_index_1_dist_mean_div'),
+      ('molecule_atom_index_0_dist_max_diff', 'molecule_atom_index_1_dist_max_diff'),
+      ('molecule_atom_index_0_dist_max_div', 'molecule_atom_index_1_dist_max_div'),
+      ('molecule_atom_index_0_dist_min_diff', 'molecule_atom_index_1_dist_min_diff'),
+      ('molecule_atom_index_0_dist_min_div', 'molecule_atom_index_1_dist_min_div'),
+      ('molecule_atom_index_0_dist_std_diff', 'molecule_atom_index_1_dist_std_diff'),
+      ('molecule_atom_index_0_dist_std_div', 'molecule_atom_index_1_dist_std_div'),
+      ('molecule_atom_0_dist_mean', 'molecule_atom_1_dist_mean'),
+      ('molecule_atom_0_dist_min', 'molecule_atom_1_dist_min'),
+      ('molecule_atom_0_dist_std', 'molecule_atom_1_dist_std'),
+      ('molecule_atom_0_dist_min_diff', 'molecule_atom_1_dist_min_diff'),
+      ('molecule_atom_0_dist_min_div', 'molecule_atom_1_dist_min_div'),
+      ('molecule_atom_0_dist_std_diff', 'molecule_atom_1_dist_std_diff'),
+      ('distance_0', 'distance_1'),
+      ('cos_0', 'cos_1'),
+      ('atom_0_interm_0_interm_1_cosine', 'interm_0_interm_1_atom_1_cosine'),
+      ]
+  for first, second in numeric_pairs:
+    first_numeric_id = np.where(numeric_colnames==first)[0][0]
+    second_numeric_id = np.where(numeric_colnames==second)[0][0]
+    assert(first_numeric_id != second_numeric_id)
+    
+    tmp = other_permutation[first_numeric_id + num_categorical]
+    other_permutation[first_numeric_id+num_categorical] = other_permutation[
+        second_numeric_id+num_categorical]
+    other_permutation[second_numeric_id+num_categorical] = tmp
+  
+  return other_permutation
 
 
 def graphs_from_nodes_edges_and_globals(
@@ -76,7 +143,7 @@ def graphs_from_nodes_edges_and_globals(
   # because they are categorical
   exclude_cols = ['molecule_name', 'atom_index', 'atom_index_0',
                   'atom_index_1', 'atom', 'atom_0', 'atom_1', 'type',
-                  'bond_type']
+                  'bond_type', 'interm_0_atom', 'interm_1_atom']
   
   # Target columns (they may not all be present)
   main_target_col = 'scalar_coupling_constant'
@@ -134,13 +201,25 @@ def graphs_from_nodes_edges_and_globals(
         target_values = np.empty((len(target_cols)))
         target_values[:] = np.nan
       edge_features = np.hstack([target_values, edge_type_id])
+      other_edge_permutation = np.zeros(())
     else:
       atom_onehot_0 = ATOM_ONEHOTS[graph_edges.atom_0.values[edge_id]]
       atom_onehot_1 = ATOM_ONEHOTS[graph_edges.atom_1.values[edge_id]]
       binding_onehot = BINDING_ONEHOTS[graph_edges.bond_type.values[edge_id]]
+      connect_0_3J_onehot = ATOM_3J_ONEHOTS[
+          graph_edges.interm_0_atom.values[edge_id]]
+      connect_1_3J_onehot = ATOM_3J_ONEHOTS[
+          graph_edges.interm_1_atom.values[edge_id]]
       edge_numeric = graph_edge_numeric.iloc[edge_id].values
       edge_features = np.hstack([binding_onehot, atom_onehot_0, atom_onehot_1,
+                                 connect_0_3J_onehot, connect_1_3J_onehot,
                                  edge_numeric])
+      
+      if edge_id == 0:
+        other_edge_permutation = get_other_edge_ids(([
+            binding_onehot.size, atom_onehot_0.size, atom_onehot_1.size,
+            connect_0_3J_onehot.size, connect_1_3J_onehot.size], [
+                (1, 2), (3, 4)]), graph_edge_numeric.columns)
       
     edge_features = edge_features.astype(np.float)
     if graph_nx_format:
@@ -151,7 +230,7 @@ def graphs_from_nodes_edges_and_globals(
       graph_no_nx[2].append((first_node, second_node, edge_features))
     
   return_graph = graph_nx if graph_nx_format else graph_no_nx
-  return return_graph
+  return (return_graph, other_edge_permutation)
 
 
 # Load the list of all graphs and generate them if they don't exist yet.
@@ -202,13 +281,17 @@ def load_all_graphs(source='train', target_graph=False, recompute_graphs=False,
             graph_nx_format))
       
     # Save the graphs and associated molecule names
-    graphs_and_names = [all_graphs, molecule_names.tolist()]
+    all_graphs, edge_permutations = zip(*all_graphs)
+    graphs_permutations_and_names = [all_graphs, edge_permutations[0],
+                                     molecule_names.tolist()]
     with open(graph_file, 'wb') as f:
-      pickle.dump(graphs_and_names, f, protocol=pickle.HIGHEST_PROTOCOL)
-      return tuple(graphs_and_names)
+      pickle.dump(graphs_permutations_and_names, f,
+                  protocol=pickle.HIGHEST_PROTOCOL)
+    
+    return tuple(graphs_permutations_and_names)
     
     
-def generate_graph(raw_graph):
+def generate_graph(raw_graph, edge_permutations, target_graph):
   num_nodes = len(raw_graph[1])
   num_edges = len(raw_graph[2])
   graph_nx = nx.OrderedMultiDiGraph()
@@ -225,33 +308,41 @@ def generate_graph(raw_graph):
   for edge_id in range(num_edges):
     graph_nx.add_edge(raw_graph[2][edge_id][0], raw_graph[2][edge_id][1],
                       features=raw_graph[2][edge_id][2])
-    graph_nx.add_edge(raw_graph[2][edge_id][1], raw_graph[2][edge_id][0],
-                      features=raw_graph[2][edge_id][2])
+    if target_graph:
+      graph_nx.add_edge(raw_graph[2][edge_id][1], raw_graph[2][edge_id][0],
+                        features=raw_graph[2][edge_id][2])
+    else:
+      graph_nx.add_edge(raw_graph[2][edge_id][1], raw_graph[2][edge_id][0],
+                        features=raw_graph[2][edge_id][2][edge_permutations])
     
   return graph_nx
     
     
 def generate_networkx_graphs(rand, num_examples, raw_input_graphs,
-                             raw_target_graphs, sample_ids, replace):
+                             raw_target_graphs, edge_permutations, sample_ids,
+                             replace):
   """Generate graphs for training."""
   input_graphs = []
   target_graphs = []
   samples = np.random.choice(sample_ids, size=(num_examples), replace=replace)
   for sample_id in samples:
-    input_graph = generate_graph(raw_input_graphs[sample_id])
-    target_graph = generate_graph(raw_target_graphs[sample_id])
+    input_graph = generate_graph(raw_input_graphs[sample_id],
+                                 edge_permutations, target_graph=False)
+    target_graph = generate_graph(raw_target_graphs[sample_id],
+                                  edge_permutations, target_graph=True)
     input_graphs.append(input_graph)
     target_graphs.append(target_graph)
     
   return input_graphs, target_graphs
     
     
-def create_placeholders(rand, batch_size, raw_input_graphs, raw_target_graphs):
+def create_placeholders(rand, batch_size, raw_input_graphs, raw_target_graphs,
+                        edge_permutations):
   """Creates placeholders for the model training and evaluation."""
   # Create some example data for inspecting the vector sizes.
   input_graphs, target_graphs = generate_networkx_graphs(
-      rand, batch_size, raw_input_graphs, raw_target_graphs, np.arange(2),
-      True)
+      rand, batch_size, raw_input_graphs, raw_target_graphs, edge_permutations,
+      np.arange(2), True)
   input_ph = utils_tf.placeholders_from_networkxs(input_graphs)
   target_ph = utils_tf.placeholders_from_networkxs(target_graphs)
   weight_ph = tf.zeros_like(target_ph.edges[:, :1])
@@ -259,13 +350,13 @@ def create_placeholders(rand, batch_size, raw_input_graphs, raw_target_graphs):
 
 
 def create_feed_dict(rand, batch_size, raw_input_graphs, raw_target_graphs,
-                     input_ph, target_ph, weight_ph, edge_rel_weights,
-                     sample_ids, replace):
+                     edge_permutations, input_ph, target_ph, weight_ph,
+                     edge_rel_weights, sample_ids, replace):
   """Creates placeholders for the model training and evaluation."""
   # Create some example data for inspecting the vector sizes.
   inputs, targets = generate_networkx_graphs(
-      rand, batch_size, raw_input_graphs, raw_target_graphs, sample_ids,
-      replace)
+      rand, batch_size, raw_input_graphs, raw_target_graphs, edge_permutations,
+      sample_ids, replace)
   input_graphs = utils_np.networkxs_to_graphs_tuple(inputs)
   target_graphs = utils_np.networkxs_to_graphs_tuple(targets)
   graph_edge_weights = edge_rel_weights[target_graphs[1][:, -1].astype(np.int)]
@@ -331,32 +422,70 @@ def batch_id_epoch_generator(sample_ids, batch_size):
       yield permuted_ids[(i*batch_size):((i+1)*batch_size)]
       
       
-def make_mlp_model(latent_size, num_layers):
+class MyMultiMlp(snt.AbstractModule):
+  """Docstring for MyMultiMlp."""
+  def __init__(self, latent_size, num_layers, layer_norm, num_separate_outputs,
+               name="MyMultiMlp"):
+    super(MyMultiMlp, self).__init__(name=name)
+    self._latent_size = latent_size
+    self._num_layers = num_layers
+    self._layer_norm = layer_norm
+    self._num_separate_outputs = num_separate_outputs
+    
+  def _build(self, inputs):
+    """Compute output Tensor from input Tensor."""
+#    import pdb; pdb.set_trace()
+    mlp_outputs = []
+    for i in range(self._num_separate_outputs):
+      mlp_name = 'edge_output_mlp_' + str(i)
+      core_mlp = snt.nets.MLP([self._latent_size] * self._num_layers,
+                              activate_final=True, name=mlp_name)
+      mlp_outputs.append(core_mlp(inputs[:, 8:]))
+      
+    combined = tf.stack(mlp_outputs, 1)*tf.expand_dims(inputs[:, :8], -1)
+    selected = tf.reduce_sum(combined, 1)
+    if self._layer_norm:
+      selected = snt.LayerNorm()(selected)
+    
+    return selected
+      
+      
+def make_mlp_model(latent_size, num_layers, layer_norm=True,
+                   separate_output=False, num_separate_outputs=8):
   """Instantiates a new MLP, followed by LayerNorm.
   The parameters of each new MLP are not shared with others generated by
   this function.
   Returns:
     A Sonnet module which contains the MLP and LayerNorm.
   """
-  return snt.Sequential([
-      snt.nets.MLP([latent_size] * num_layers, activate_final=True),
-      snt.LayerNorm()
-  ])
+  if separate_output:
+    return MyMultiMlp(latent_size, num_layers, layer_norm,
+                      num_separate_outputs)
+  else:
+    layers = [snt.nets.MLP([latent_size] * num_layers, activate_final=True)]
+    layers = layers + [snt.LayerNorm()] if layer_norm else layers
+    return snt.Sequential(layers)
 
 
 class MLPGraphIndependent(snt.AbstractModule):
   """GraphIndependent with MLP edge, node, and global models."""
 
-  def __init__(self, latent_size=16, num_layers=2, double_edge=False,
+  def __init__(self, latent_size=16, num_layers=2,
+               output_independent=False, separate_edge_output=False,
+               edge_output_layer_norm=False,
                name="MLPGraphIndependent"):
     super(MLPGraphIndependent, self).__init__(name=name)
-    edge_size = 2*latent_size if double_edge else latent_size
-    node_size = 1 if double_edge else latent_size
-    global_size = 1 if double_edge else latent_size
+    edge_size = 2*latent_size if output_independent else latent_size
+    edge_size = edge_size // 4 if separate_edge_output else edge_size
+    node_size = 1 if output_independent else latent_size
+    global_size = 1 if output_independent else latent_size
+    layer_norm = not output_independent or edge_output_layer_norm
     with self._enter_variable_scope():
       self._network = modules.GraphIndependent(
           edge_model_fn=partial(make_mlp_model, latent_size=edge_size,
-                                num_layers=num_layers),
+                                num_layers=num_layers,
+                                layer_norm=layer_norm,
+                                separate_output=separate_edge_output),
           node_model_fn=partial(make_mlp_model, latent_size=node_size,
                                 num_layers=num_layers),
           global_model_fn=partial(make_mlp_model, latent_size=global_size,
@@ -368,6 +497,7 @@ class MLPGraphIndependent(snt.AbstractModule):
 
 class MLPGraphNetwork(snt.AbstractModule):
   """GraphNetwork with MLP edge, node, and global models."""
+  # Core of the architecture
 
   def __init__(self, latent_size=16, num_layers=2, name="MLPGraphNetwork"):
     super(MLPGraphNetwork, self).__init__(name=name)
@@ -385,7 +515,7 @@ class MLPGraphNetwork(snt.AbstractModule):
 
 
 class MyEncodeProcessDecode(snt.AbstractModule):
-  # Note: all 3*3 MLPs are currently of the same dimensions, can be decoupled!!
+  # Note: all 3*3 MLPs can be of different dimensions!!
   
   """Full encode-process-decode model.
   The model we explore includes three components:
@@ -413,12 +543,19 @@ class MyEncodeProcessDecode(snt.AbstractModule):
                global_output_size=None,
                latent_size=16,
                num_layers=2,
+               separate_edge_output=False,
+               edge_output_layer_norm=False,
+               skip_encoder_decoder=False,
                name="MyEncodeProcessDecode"):
     super(MyEncodeProcessDecode, self).__init__(name=name)
     self._encoder = MLPGraphIndependent(latent_size, num_layers)
     self._core = MLPGraphNetwork(latent_size, num_layers)
-    self._decoder = MLPGraphIndependent(latent_size, num_layers,
-                                        double_edge=True)
+    self._edge_type_concat = separate_edge_output
+    self._decoder = MLPGraphIndependent(
+        latent_size, num_layers, output_independent=True,
+        separate_edge_output=separate_edge_output,
+        edge_output_layer_norm=edge_output_layer_norm)
+    self._skip_encoder_decoder = skip_encoder_decoder
     # Transforms the outputs into the appropriate shapes.
     if edge_output_size is None:
       edge_fn = None
@@ -443,13 +580,21 @@ class MyEncodeProcessDecode(snt.AbstractModule):
     for _ in range(num_processing_steps):
       core_input = utils_tf.concat([latent0, latent], axis=1)
       latent = self._core(core_input)
-      decoded_op = self._decoder(latent)
+      if self._skip_encoder_decoder:
+        decoder_input = utils_tf.concat([latent0, latent], axis=1)
+      else:
+        decoder_input = latent
+      if self._edge_type_concat:
+        decoder_input = decoder_input._replace(
+            edges=tf.concat([input_op.edges[:, :8], decoder_input.edges],
+                            axis=1))
+      decoded_op = self._decoder(decoder_input)
       output_ops.append(self._output_transform(decoded_op))
     return output_ops
 
 
-def train_model(hyperpars, train_graphs, train_target_graphs, train_ids,
-                valid_ids, model_save_path):
+def train_model(hyperpars, train_graphs, train_target_graphs,
+                edge_permutations, train_ids, valid_ids, model_save_path):
   # 1) Set up model training and evaluation  
   
   # The model we explore includes three components:
@@ -483,13 +628,18 @@ def train_model(hyperpars, train_graphs, train_target_graphs, train_ids,
   tf.reset_default_graph()
   rand = np.random.RandomState(seed=hyperpars['seed'])
   input_ph, target_ph, weight_ph = create_placeholders(
-      rand, hyperpars['batch_size_train'], train_graphs, train_target_graphs)
+      rand, hyperpars['batch_size_train'], train_graphs, train_target_graphs,
+      edge_permutations)
   
   # Connect the data to the model.
   # Instantiate the model.
-  model = MyEncodeProcessDecode(edge_output_size=1,
-                                latent_size=hyperpars['latent_size'],
-                                num_layers=hyperpars['num_layers'])
+  model = MyEncodeProcessDecode(
+      edge_output_size=1,
+      latent_size=hyperpars['latent_size'],
+      num_layers=hyperpars['num_layers'],
+      separate_edge_output=hyperpars['separate_edge_output'],
+      edge_output_layer_norm=hyperpars['edge_output_layer_norm'],
+      skip_encoder_decoder=hyperpars['skip_connection_encoder_decoder'])
   # A list of outputs, one per processing step.
   output_ops_train = model(input_ph, hyperpars['num_processing_steps'])
   output_ops_valid = model(input_ph, hyperpars['num_processing_steps'])
@@ -534,12 +684,12 @@ def train_model(hyperpars, train_graphs, train_target_graphs, train_ids,
       train_ids, hyperpars['batch_size_train'])
   edge_rel_weights = np.ones((23, 1)) # 23 different bond types
   edge_rel_weights[8:, 0] = -99999
-  for iteration in range(hyperpars['num_training_iterations']):
+  for iteration in range(int(hyperpars['num_training_iterations'])):
     batch_train_ids = next(batch_epoch_generator)
     feed_dict = create_feed_dict(
         rand, hyperpars['batch_size_train'], train_graphs, train_target_graphs,
-        input_ph, target_ph, weight_ph, edge_rel_weights, batch_train_ids,
-        replace=False)
+        edge_permutations, input_ph, target_ph, weight_ph, edge_rel_weights,
+        batch_train_ids, replace=False)
     train_values = sess.run({
         'step': step_op,
         'target': target_ph,
@@ -552,6 +702,9 @@ def train_model(hyperpars, train_graphs, train_target_graphs, train_ids,
 #    var = [v for v in tf.trainable_variables() if v.name == "MLPGraphIndependent/graph_independent/edge_model/mlp/linear_0/w:0"][0]
 #    var_vals = sess.run(var)
 #    print(var_vals.sum())
+#    for v in tf.trainable_variables():
+#      print(v.name)
+#    import pdb; pdb.set_trace()
     
     the_time = time.time()
     elapsed_since_last_log = the_time - last_log_time
@@ -561,8 +714,8 @@ def train_model(hyperpars, train_graphs, train_target_graphs, train_ids,
       last_log_time = the_time
       feed_dict = create_feed_dict(
           rand, hyperpars['batch_size_valid_train'], train_graphs,
-          train_target_graphs, input_ph, target_ph, weight_ph,
-          edge_rel_weights, valid_ids, replace=False)
+          train_target_graphs, edge_permutations, input_ph, target_ph,
+          weight_ph, edge_rel_weights, valid_ids, replace=False)
       valid_values = sess.run({
           'target': target_ph,
           'loss': loss_op_valid,
@@ -600,21 +753,31 @@ def train_model(hyperpars, train_graphs, train_target_graphs, train_ids,
 #        print('Elapsed validation time: {}'.format(
 #            time.time()-before_validation_time))
         best_validation_loss = validation_loss
+       
+      # Exit if the time budget is exceeded
+      if elapsed > hyperpars['max_train_seconds']:
+        print('Exiting because the train budget is exceeded')
+        break
         
 
-def validate_model(hyperpars, train_graphs, train_target_graphs, valid_ids,
-                   model_save_path):
+def validate_model(hyperpars, train_graphs, train_target_graphs,
+                   edge_permutations, valid_ids, model_save_path):
   # Data. Input and target placeholders.
   tf.reset_default_graph()
   rand = np.random.RandomState(seed=hyperpars['seed'])
   input_ph, target_ph, weight_ph = create_placeholders(
-      rand, hyperpars['batch_size_train'], train_graphs, train_target_graphs)
+      rand, hyperpars['batch_size_train'], train_graphs, train_target_graphs,
+      edge_permutations)
   
   # Connect the data to the model.
   # Instantiate the model.
-  model = MyEncodeProcessDecode(edge_output_size=1,
-                                latent_size=hyperpars['latent_size'],
-                                num_layers=hyperpars['num_layers'])
+  model = MyEncodeProcessDecode(
+      edge_output_size=1,
+      latent_size=hyperpars['latent_size'],
+      num_layers=hyperpars['num_layers'],
+      separate_edge_output=hyperpars['separate_edge_output'],
+      edge_output_layer_norm=hyperpars['edge_output_layer_norm'],
+      skip_encoder_decoder=hyperpars['skip_connection_encoder_decoder'])
   # A list of outputs, one per processing step.
   output_ops_valid = model(input_ph, hyperpars['num_processing_steps'])
   
@@ -635,8 +798,8 @@ def validate_model(hyperpars, train_graphs, train_target_graphs, valid_ids,
   edge_rel_weights = np.ones((23, 1)) # 23 different bond types
   edge_rel_weights[8:, 0] = -99999
   feed_dict = create_feed_dict(
-      rand, hyperpars['batch_size_valid'], train_graphs,
-      train_target_graphs, input_ph, target_ph, weight_ph, edge_rel_weights,
+      rand, hyperpars['batch_size_valid'], train_graphs, train_target_graphs,
+      edge_permutations, input_ph, target_ph, weight_ph, edge_rel_weights,
       valid_ids, replace=False)
   valid_values = sess.run({
       'target': target_ph,
