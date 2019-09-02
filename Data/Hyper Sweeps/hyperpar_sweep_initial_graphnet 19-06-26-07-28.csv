@@ -1,0 +1,5 @@
+Score,MAE,inverse_relative_error_weights,latent_size,learning_rate,num_layers,num_processing_steps,separate_edge_output,skip_connection_encoder_decoder
+-0.9752968319237539,0.3527280390262604,False,256,0.001,4,8,False,True
+-0.9738406115843332,0.3594490587711334,False,128,0.001,4,16,False,False
+-1.0249220832915027,0.3302401006221771,False,128,0.001,4,8,False,True
+-1.1026204560544133,0.3424188494682312,True,128,0.001,4,16,True,False

@@ -16,7 +16,7 @@ continuing_experiment = ['19-06-21-17-12.csv', None][1]
 fixed_params = {
     'seed': 14,
     'num_training_iterations': 1e9,
-    'max_train_seconds': 3600*4,
+    'max_train_seconds': 3600*12,
     'batch_size_train': 32,
     'batch_size_valid_train': 256,
     'batch_size_valid': 1024,
@@ -33,7 +33,7 @@ param_grid = {
     'skip_connection_encoder_decoder': [False, True],
     'separate_edge_output': [False, True],
     'latent_size': [128, 256],
-    'num_layers': [3, 4],
+    'num_layers': [4],
 }
 
 # Load the train graphs if they have not been loaded before
@@ -71,6 +71,12 @@ for i in range(num_random_hyperpars):
   print('Random hyperpar setting {} of {}'.format(i+1, num_random_hyperpars))
   model_save_path = model_save_path_base + '_' + str(i) + '.ckpt'
   hyperpars = {k: random.choice(v) for k, v in param_grid.items()}
+  
+  num_processing_steps = 8 if i % 2 == 0 else 16
+  hyperpars['num_processing_steps'] = num_processing_steps
+  separate_edge_output = i % 4 > 2
+  hyperpars['separate_edge_output'] = separate_edge_output
+  
   selected_grid = OrderedDict(sorted(hyperpars.items()))
   hyperpars.update(fixed_params)
   utils.train_model(hyperpars, TRAIN_GRAPHS, TRAIN_TARGET_GRAPHS,

@@ -11,21 +11,22 @@ hyperpars = {
   
   # Model parameters
   'num_processing_steps': 16, # (message-passing) steps.
+  'skip_connection_encoder_decoder': False,
+  'edge_output_layer_norm': False,
+  'separate_edge_output': True,
+  'latent_size': 128,
+  'num_layers': 4,
   
   # Data / training parameters.
   'num_training_iterations': 1e9,
-  'edge_output_layer_norm': False,
-  'max_train_seconds': 180,
-  'latent_size': 256,
-  'num_layers': 2,
+  'max_train_seconds': 15*3600,
+  
   'batch_size_train': 32,
   'batch_size_valid_train': 256,
   'batch_size_valid': 1024,
   'validation_fraction': 0.2,
   'learning_rate': 1e-3,
-  'inverse_relative_error_weights': False,
-  'skip_connection_encoder_decoder': True,
-  'separate_edge_output': True,
+  'inverse_relative_error_weights': True,
   
   # How much time between logging and printing the current results.
   # Make sure that this is a lot larger than the time to save the model!
