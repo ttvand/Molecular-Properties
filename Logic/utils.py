@@ -2,6 +2,9 @@ from functools import partial
 from graph_nets import modules
 from graph_nets import utils_np
 from graph_nets import utils_tf
+import matplotlib.pyplot as plt
+import math
+import models
 import multiprocessing as mp
 import numpy as np
 import networkx as nx
@@ -13,6 +16,7 @@ import sonnet as snt
 import tensorflow as tf
 tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.ERROR) # https://stackoverflow.com/questions/40426502/is-there-a-way-to-suppress-the-messages-tensorflow-prints/40426709
 #  from tensorflow.python.keras.utils import losses_utils
+from tensorflow.keras import backend as K
 import time
 
 
@@ -132,7 +136,8 @@ def get_other_edge_ids(cat_sizes_pairs, numeric_colnames):
 
 
 def graphs_from_nodes_edges_and_globals(
-    graph_nodes, graph_edges, graph_globals, target_graph, graph_nx_format):
+    graph_nodes, graph_edges, graph_globals, only_edge, target_graph,
+    graph_nx_format):
   num_nodes = graph_nodes.shape[0]
   num_edges = graph_edges.shape[0]
   
@@ -230,14 +235,43 @@ def graphs_from_nodes_edges_and_globals(
       graph_no_nx[2].append((first_node, second_node, edge_features))
     
   return_graph = graph_nx if graph_nx_format else graph_no_nx
+  if only_edge:
+    return_graph = convert_to_edge_features(return_graph)
   return (return_graph, other_edge_permutation)
+
+
+def convert_to_edge_features(graph_features):
+  global_features = graph_features[0]
+  node_details = graph_features[1]
+  edge_details  = graph_features[2]
+  
+  node_ids = np.array([n[0] for n in node_details])
+  assert np.all(node_ids == np.arange(len(node_details)))
+  node_features = np.stack([n[1] for n in node_details])
+  edge_first_ids = np.array([e[0] for e in edge_details])
+  edge_second_ids = np.stack([e[1] for e in edge_details])
+  edge_features = np.stack([e[2] for e in edge_details])
+  first_node_edge_features = node_features[edge_first_ids]
+  second_node_edge_features = node_features[edge_second_ids]
+  
+  all_edge_features = np.concatenate([
+      np.tile(global_features, [edge_features.shape[0], 1]),
+      first_node_edge_features,
+      second_node_edge_features,
+      edge_features,
+      ], axis=1)
+        
+  return all_edge_features
 
 
 # Load the list of all graphs and generate them if they don't exist yet.
 def load_all_graphs(source='train', target_graph=False, recompute_graphs=False,
-                    parallel=True, graph_nx_format=False):
+                    parallel=True, graph_nx_format=False,
+                    only_edge=False):
   target_ext = '_target' if target_graph else ''
-  graph_file = data_folder + source + target_ext + '_graphs.pickle'
+  only_edge_ext = '_only_edge' if only_edge else ''
+  graph_file = data_folder + source + target_ext + only_edge_ext + (
+      '_graphs.pickle')
   
   if not recompute_graphs and os.path.exists(graph_file):
     with open(graph_file, 'rb') as f:
@@ -270,18 +304,20 @@ def load_all_graphs(source='train', target_graph=False, recompute_graphs=False,
       pool = mp.Pool(processes=mp.cpu_count()-1)
       results = [pool.apply_async(
           graphs_from_nodes_edges_and_globals, args=(
-              n, e, g, target_graph, graph_nx_format,)) for (
+              n, e, g, only_edge, target_graph,
+              graph_nx_format,)) for (
               n, e, g) in zip(all_nodes, all_edges, all_globals)]
       all_graphs = [p.get() for p in results]
     else:
       for i, name in enumerate(molecule_names):
         print('Molecule {} of {}.'.format(i+1, len(molecule_names)))
         all_graphs.append(graphs_from_nodes_edges_and_globals(
-            all_nodes[i], all_edges[i], all_globals[i], target_graph,
-            graph_nx_format))
+            all_nodes[i], all_edges[i], all_globals[i], only_edge,
+            target_graph, graph_nx_format))
       
     # Save the graphs and associated molecule names
     all_graphs, edge_permutations = zip(*all_graphs)
+    import pdb; pdb.set_trace()
     graphs_permutations_and_names = [all_graphs, edge_permutations[0],
                                      molecule_names.tolist()]
     with open(graph_file, 'wb') as f:
@@ -825,6 +861,132 @@ def validate_model(hyperpars, train_graphs, train_target_graphs,
   print('Validation score: {:.4f}'.format(validation_score))
   
   return validation_score, validation_loss
+
+
+def masked_mae(y, p, mask_val):
+  mask = K.cast(K.not_equal(y, mask_val), K.floatx())
+  return tf.compat.v2.losses.mae(y*mask, p*mask)
+
+
+def make_masked_mae(training_config):
+  def loss(y, p):
+    return masked_mae(y, p, mask_val=training_config['nan_coding_value'])
+
+  return loss
+
+
+# Custom Keras callback for plotting learning progress
+class PlotLosses(tf.keras.callbacks.Callback):
+  def on_train_begin(self, logs={}):
+    self.i = 0
+    self.x = []
+    self.val_losses = []
+    self.fig = plt.figure()
+    self.logs = []
+    
+    loss_extensions = [
+        '', # The no extension loss represents the total loss.
+        'val', # Validation loss
+#        
+#        'segmentation_pred', # Train segmentation loss
+#        'val_segmentation_pred', # Validation segmentation loss
+        ]
+    
+    self.best_loss_key = 'loss'
+    self.loss_keys = [e + ('_' if e else '') + 'loss' for e in loss_extensions]
+
+  def on_epoch_end(self, epoch, logs={}):
+    # Drop absent loss keys on the first epoch end
+    if self.i == 0:
+      self.loss_keys = list(set(self.loss_keys).intersection(set(logs.keys())))
+      self.losses = {k: [] for k in self.loss_keys}
+    
+    self.logs.append(logs)
+    self.x.append(self.i)
+    for k in self.loss_keys:
+      self.losses[k].append(logs.get(k))
+    self.i += 1
+    
+    best_loss = np.repeat(np.array(self.losses[self.best_loss_key]).min(),
+                              self.i).tolist()
+    best_id = (1+np.repeat(
+        np.array(self.losses[self.best_loss_key]).argmin(), 2)).tolist()
+    for k in self.loss_keys:
+      plt.plot([1+x for x in self.x], self.losses[k], label=k)
+    all_losses = np.array(list(self.losses.values())).flatten()
+    if len(self.losses) >= 1:
+      plt.plot([1+x for x in self.x], best_loss, linestyle='--', color='r',
+               label='')
+      plt.plot(best_id, [min(all_losses) - 0.1, best_loss[0]],
+               linestyle='--', color='r', label='')
+    plt.ylim(0, max(all_losses)*1.02)
+    plt.legend()
+    plt.show()
+    
+    
+def generator_batch(features, targets, data_ids, hyperpars, batch_size,
+                    all_targets=False):
+  num_molecules = data_ids.size
+  max_edges = hyperpars['max_edges']
+  num_edge_features = hyperpars['num_edge_features']
+  padded_num_edge_features = hyperpars['padded_num_edge_features']
+  num_batches_per_epoch = math.ceil(data_ids.size/batch_size)
+  nan_coding_value = hyperpars['nan_coding_value']
+  auxiliary_losses = hyperpars['auxiliary_losses']
+  transformer_depth = hyperpars['transformer_depth']
+  
+  batch_in_epoch = 0
+  while True:
+    if batch_in_epoch == 0:
+      shuffled_data_ids = np.random.permutation(data_ids)
+    
+    # Generate a batch of data
+    batch_start_id = batch_in_epoch*batch_size
+    batch_end_id = min(num_molecules, (batch_in_epoch+1)*batch_size)
+    this_batch_size = batch_end_id-batch_start_id
+    batch_features = np.zeros((this_batch_size, max_edges,
+                               padded_num_edge_features))
+    target_shape = (this_batch_size, max_edges, targets[0].shape[1]) if (
+        all_targets) else (this_batch_size, max_edges)
+    batch_targets = np.ones(target_shape) * nan_coding_value
+    for i in range(this_batch_size):
+      data_id = shuffled_data_ids[batch_start_id+i]
+      molecule_features = features[data_id]
+      molecule_targets = targets[data_id]
+      num_edges = molecule_features.shape[0]
+      
+      batch_features[i, :num_edges, :num_edge_features] = molecule_features
+      valid_target_rows = np.where(~np.isnan(molecule_targets[:, 0]))[0]
+      if all_targets:
+        batch_targets[i, :molecule_targets.shape[0]] = molecule_targets
+      else:
+        batch_targets[i, valid_target_rows] = molecule_targets[
+            valid_target_rows, 0]
+        
+    if auxiliary_losses:
+      batch_targets = np.repeat(batch_targets[:, :, np.newaxis],
+                                transformer_depth, axis=2)
+    
+    yield batch_features, batch_targets
+    
+    batch_in_epoch = (batch_in_epoch + 1) % num_batches_per_epoch
+  
+  
+def get_model(hyperpars):
+  if hyperpars['model_save_name'] == 'initial_transformer':
+    return models.initial_transformer
+  
+  raise ValueError('Model save name not supported')
+  
+  
+def log_mae(y, p, s):
+  valid_sc = np.arange(8)
+  log_mae_sc = np.zeros_like(valid_sc)
+  for i in range(valid_sc.size):
+    sc = valid_sc[i]
+    log_mae_sc = np.log(np.abs(y[s==sc]-p[s==sc]).mean())
+  
+  return log_mae_sc.mean()
 
 
 #load_all_graphs('test', recompute_graphs=True)

@@ -3,3 +3,5 @@
 .RData
 .Ruserdata
 *.pyc
+*.h5
+*.Rproj
