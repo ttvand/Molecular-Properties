@@ -15,7 +15,7 @@ hyperpars = {
     'transformer_num_heads': 8,
     'transformer_residual_dropout': 0.1,
     'transformer_attention_dropout': 0.1,
-    'transformer_depth': 7,
+    'transformer_depth': 6,
     'prediction_layers': [],
     'auxiliary_losses': True,
     
@@ -25,7 +25,7 @@ hyperpars = {
     'batch_size_valid': 1024,
     'validation_fraction': 0.2,
     'initial_lr': 1e-3,
-    'epochs': 1,
+    'epochs': 100,
     'nan_coding_value': 999,
     
     'override_saved_model': True,

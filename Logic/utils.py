@@ -924,7 +924,7 @@ class PlotLosses(tf.keras.callbacks.Callback):
     plt.show()
     
     
-def generator_batch(features, targets, data_ids, hyperpars, batch_size,
+def generator_batch(features, targets, data_ids, hyperpars, batch_size, shuffle,
                     all_targets=False):
   num_molecules = data_ids.size
   max_edges = hyperpars['max_edges']
@@ -938,7 +938,7 @@ def generator_batch(features, targets, data_ids, hyperpars, batch_size,
   batch_in_epoch = 0
   while True:
     if batch_in_epoch == 0:
-      shuffled_data_ids = np.random.permutation(data_ids)
+      epoch_data_ids = np.random.permutation(data_ids) if shuffle else data_ids
     
     # Generate a batch of data
     batch_start_id = batch_in_epoch*batch_size
@@ -950,7 +950,7 @@ def generator_batch(features, targets, data_ids, hyperpars, batch_size,
         all_targets) else (this_batch_size, max_edges)
     batch_targets = np.ones(target_shape) * nan_coding_value
     for i in range(this_batch_size):
-      data_id = shuffled_data_ids[batch_start_id+i]
+      data_id = epoch_data_ids[batch_start_id+i]
       molecule_features = features[data_id]
       molecule_targets = targets[data_id]
       num_edges = molecule_features.shape[0]
@@ -987,6 +987,43 @@ def log_mae(y, p, s):
     log_mae_sc = np.log(np.abs(y[s==sc]-p[s==sc]).mean())
   
   return log_mae_sc.mean()
+
+
+class LogMAEMetric(tf.keras.callbacks.Callback):
+  def __init__(self, validation_generator, validation_steps, coupling_types):
+    self.validation_generator = validation_generator
+    self.validation_steps = validation_steps
+    self.coupling_types = coupling_types
+
+  def on_epoch_end(self, batch, logs={}):
+    self.scores = []
+
+    valid_preds = []
+    valid_targets = []
+    for batch_index in range(self.validation_steps):
+      features, targets = next(self.validation_generator)          
+      non_missing_features = features[:, :, 0].flatten() > 0
+      preds = self.model.predict(features)
+      if len(preds.shape) == 3:
+        preds = preds[:, :, -1]
+        targets = targets[:, :, -1]
+      valid_preds.append(preds.flatten()[non_missing_features])
+      valid_targets.append(targets.flatten()[non_missing_features])
+    
+    valid_preds = np.concatenate(valid_preds)
+    valid_targets = np.concatenate(valid_targets)
+    val_log_mae = log_mae(valid_targets, valid_preds, self.coupling_types)
+    print('Validation log MAE: {0:.5f}'.format(val_log_mae))
+    return
+  
+  
+def get_coupling_types(targets, valid_ids):
+  coupling_types = []
+  for i in valid_ids:
+    coupling_types.append(targets[i][:, -1])
+    
+  coupling_types = np.concatenate(coupling_types)
+  return coupling_types
 
 
 #load_all_graphs('test', recompute_graphs=True)

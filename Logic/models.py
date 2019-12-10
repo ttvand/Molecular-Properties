@@ -1,5 +1,6 @@
 #import tensorflow as tf
 from tensorflow.keras import backend as K
+from tensorflow.keras.layers import BatchNormalization
 from tensorflow.keras.layers import Dense
 #from tensorflow.keras.layers import Dropout
 from tensorflow.keras.layers import Input
@@ -19,7 +20,9 @@ def initial_transformer(hyperpars):
   
   inputs = Input((max_edges, num_edge_features), name='inputs')
   
+#  bn_inputs = BatchNormalization()(inputs)
   x = inputs
+  x = BatchNormalization()(x)
   auxiliary_outputs = []
   for step in range(hyperpars['transformer_depth']):
     transformer_block = TransformerBlock(
@@ -31,6 +34,7 @@ def initial_transformer(hyperpars):
     vanilla_wiring=False,
     )
     x = transformer_block(x)
+#    x = transformer_block(x+bn_inputs)
     if auxiliary_losses:
       y = x
       for layer in prediction_layers + [1]:

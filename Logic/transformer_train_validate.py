@@ -20,10 +20,11 @@ def train(hyperpars, features, targets, train_ids, valid_ids, save_path):
   K.clear_session()
   if hyperpars['override_saved_model'] or not os.path.exists(save_path):
     train_gen = utils.generator_batch(
-        features, targets, train_ids, hyperpars, hyperpars['batch_size_train'])
+        features, targets, train_ids, hyperpars, hyperpars['batch_size_train'],
+        shuffle=True)
     validation_gen = utils.generator_batch(
         features, targets, valid_ids, hyperpars,
-        hyperpars['batch_size_valid_train'])
+        hyperpars['batch_size_valid_train'], shuffle=False)
     train_model = utils.get_model(hyperpars)
     inputs, outputs = train_model(hyperpars)
     model = Model(inputs, outputs)
@@ -34,7 +35,15 @@ def train(hyperpars, features, targets, train_ids, valid_ids, save_path):
     checkpointer = ModelCheckpoint(save_path, monitor=monitor,
                                    mode=monitor_mode, verbose=1,
                                    save_best_only=True, save_freq='epoch')
-    callbacks = [checkpointer]
+    validation_steps = math.ceil(valid_ids.size/hyperpars[
+        'batch_size_valid_train'])
+    coupling_types = utils.get_coupling_types(targets, valid_ids)
+    validation_gen_copy = utils.generator_batch(
+        features, targets, valid_ids, hyperpars,
+        hyperpars['batch_size_valid_train'], shuffle=False)
+    mae_metric = utils.LogMAEMetric(validation_gen_copy, validation_steps,
+                                    coupling_types)
+    callbacks = [checkpointer, mae_metric]
     callbacks.append(utils.PlotLosses())
 #    callbacks.append(TensorBoard('./Graph'))
     
@@ -44,8 +53,7 @@ def train(hyperpars, features, targets, train_ids, valid_ids, save_path):
         epochs=hyperpars['epochs'],
         callbacks=callbacks,
         validation_data=validation_gen,
-        validation_steps=math.ceil(valid_ids.size/hyperpars[
-            'batch_size_valid_train']),
+        validation_steps=validation_steps,
         verbose=1,
         )
   
@@ -55,7 +63,7 @@ def train(hyperpars, features, targets, train_ids, valid_ids, save_path):
 def validate(hyperpars, features, targets, valid_ids, save_path):
   validation_gen = utils.generator_batch(
         features, targets, valid_ids, hyperpars,
-        hyperpars['batch_size_valid'], all_targets=True)
+        hyperpars['batch_size_valid'], shuffle=False, all_targets=True)
   
   # Generate the validation data by calling the generator *N* times
   num_valid_batches = math.ceil(valid_ids.size/hyperpars['batch_size_valid'])
